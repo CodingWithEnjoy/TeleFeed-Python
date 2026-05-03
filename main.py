@@ -21,20 +21,14 @@ def main():
     for channel in channels:
         logging.info(f"Processing channel: {channel}")
         try:
-            # Get channel info
-            channel_info = fetcher.get_channel_info(channel)
+            # Now uses the same fetch_channel_data() function signature
+            data = fetcher.fetch_channel_data(channel)
             
-            # Get posts - pass just the username, not a URL
-            posts = fetcher.fetch_posts(channel)
-            
-            data = {
-                "info": channel_info,
-                "posts": posts,
-                "last_updated": int(time.time())
-            }
-            
-            exporter.export_to_json(channel, data)
-            logging.info(f"Successfully exported {len(posts)} posts for {channel}")
+            if data:
+                exporter.export_to_json(channel, data)
+                logging.info(f"Successfully exported {len(data['posts'])} posts for {channel}")
+            else:
+                logging.error(f"No data returned for {channel}")
             
         except Exception as e:
             logging.error(f"Failed to process channel {channel}: {e}")
