@@ -1,239 +1,233 @@
 import requests
-from bs4 import BeautifulSoup
 import re
-from datetime import datetime
-import logging
 import time
 import random
-import json
+import logging
+from datetime import datetime
 
 class TelegramFetcher:
     def __init__(self):
         self.session = requests.Session()
         self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/91.0.864.59",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 OPR/77.0.4054.172",
         ]
         
     def _get_headers(self):
         return {
             'User-Agent': random.choice(self.user_agents),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
             'DNT': '1',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1'
         }
         
     def _rate_limit(self):
-        """Random delay to avoid rate limits"""
+        """Random delay to avoid rate limiting - matches Go version's 2-5 second delay"""
         delay = random.uniform(2, 5)
+        logging.info(f"  - Waiting {delay:.1f}s before request...")
         time.sleep(delay)
         
-    def fetch_posts(self, channel_username):
+    def fetch_channel_data(self, username):
         """
-        Fetch posts from a public Telegram channel via telesco.pe
-        This mimics the Go version's web scraping approach
+        Fetch channel data exactly like the Go version's fetchChannelData()
+        Uses https://t.me/s/{username} instead of telesco.pe
         """
         self._rate_limit()
         
+        url = f"https://t.me/s/{username}"
+        logging.info(f"Fetching {url}")
+        
         try:
-            url = f"https://telesco.pe/{channel_username}"
-            logging.info(f"Fetching posts from {url}")
+            response = self.session.get(
+                url, 
+                headers=self._get_headers(), 
+                timeout=30,
+                allow_redirects=True
+            )
             
-            response = self.session.get(url, headers=self._get_headers(), timeout=30)
-            response.raise_for_status()
+            if response.status_code != 200:
+                logging.error(f"HTTP error: {response.status_code}")
+                return None
             
-            soup = BeautifulSoup(response.content, 'html.parser')
+            html = response.text
             
-            posts = []
-            # Find all message containers - telesco.pe uses specific classes
-            message_blocks = soup.find_all('div', class_='tgme_widget_message')
+            # Extract channel info - matches Go's extractChannelInfo()
+            channel_info = self._extract_channel_info(html, username)
             
-            logging.info(f"Found {len(message_blocks)} message blocks for {channel_username}")
+            # Extract posts - matches Go's extractPostsFromHTML2()
+            posts = self._extract_posts(html)
             
-            for block in message_blocks[:20]:  # Limit to 20 posts like the Go version
-                post = self._parse_message_block(block)
-                if post:
-                    posts.append(post)
-                    
-            return posts
+            return {
+                "info": channel_info,
+                "posts": posts,
+                "last_updated": int(time.time())
+            }
             
         except Exception as e:
-            logging.error(f"Error fetching posts from {channel_username}: {e}")
+            logging.error(f"Failed to fetch channel {username}: {e}")
             raise
-            
-    def _parse_message_block(self, block):
-        """Parse a single message block into structured data"""
-        try:
-            # Get message ID
-            message_id = 0
-            id_match = re.search(r'message(\d+)', block.get('data-post', ''))
-            if id_match:
-                message_id = int(id_match.group(1))
-            
-            # Get message text
-            text_div = block.find('div', class_='tgme_widget_message_text')
-            message_text = ""
-            if text_div:
-                # Preserve HTML formatting like the Go version
-                message_text = str(text_div.decode_contents()) if hasattr(text_div, 'decode_contents') else text_div.get_text()
-                # Clean up the HTML a bit
-                message_text = message_text.strip()
-            
-            # Get date
-            date_tag = block.find('time')
-            date_str = ""
-            unix_time = 0
-            if date_tag and date_tag.get('datetime'):
-                date_str = date_tag['datetime']
+    
+    def _extract_channel_info(self, html, username):
+        """Matches Go's extractChannelInfo() exactly"""
+        # Extract channel title from og:title meta tag
+        title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+        title = title_match.group(1) if title_match else username
+        
+        # Extract channel photo from og:image meta tag
+        photo_match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+        photo = photo_match.group(1) if photo_match else ""
+        
+        return {
+            "id": 0,  # Not available in HTML, matches Go version
+            "title": title,
+            "username": username,
+            "photo_url": photo
+        }
+    
+    def _extract_posts(self, html):
+        """
+        Matches Go's extractPostsFromHTML2()
+        Finds all tgme_widget_message_wrap divs and parses each one
+        """
+        # Find all message wrap blocks - exact pattern from Go version
+        message_pattern = re.compile(r'<div class="tgme_widget_message_wrap[^>]*>')
+        message_blocks = message_pattern.findall(html)
+        
+        logging.info(f"Found {len(message_blocks)} message wraps in HTML")
+        
+        if not message_blocks:
+            logging.warning("No message wraps found!")
+            return []
+        
+        # Now extract the full HTML for each message block
+        posts = []
+        # Split HTML by message wrap and parse each section
+        sections = re.split(r'<div class="tgme_widget_message_wrap[^>]*>', html)[1:]  # Skip first empty part
+        
+        for i, section in enumerate(sections[:20]):  # Limit to 20 posts
+            try:
+                # Find closing div for this message
+                post_html = self._extract_post_html(section)
+                if post_html:
+                    post = self._parse_single_post(post_html, i)
+                    posts.append(post)
+            except Exception as e:
+                logging.error(f"Error parsing post {i}: {e}")
+                continue
+        
+        return posts
+    
+    def _extract_post_html(self, section):
+        """Extract complete post HTML by finding matching closing divs"""
+        # Find the end of this message block
+        depth = 0
+        for i, char in enumerate(section):
+            if section[i:i+4] == '<div':
+                depth += 1
+            elif section[i:i+5] == '</div':
+                depth -= 1
+                if depth == 0:
+                    return section[:i+6]
+        return section  # Return whole section if we can't find the end
+    
+    def _parse_single_post(self, post_html, index):
+        """Matches Go's parseSinglePost() exactly"""
+        
+        # Extract post ID from data-post attribute
+        post_id = 0
+        id_match = re.search(r'data-post="[^"]*/(\d+)"', post_html)
+        if id_match:
+            post_id = int(id_match.group(1))
+        
+        # Extract message text
+        message = ""
+        message_match = re.search(r'<div class="tgme_widget_message_text[^>]*>(.*?)</div>', post_html, re.DOTALL)
+        if message_match:
+            # Remove HTML tags but keep text
+            message = re.sub(r'<[^>]*>', '', message_match.group(1))
+            message = message.strip()
+        
+        # Extract date from time tag
+        date_iso = ""
+        post_date = datetime.now()
+        date_match = re.search(r'<time datetime="([^"]+)"', post_html)
+        if date_match:
+            date_iso = date_match.group(1)
+            try:
+                # Parse ISO 8601 format
+                post_date = datetime.fromisoformat(date_iso.replace('Z', '+00:00'))
+            except:
+                pass
+        
+        # Extract views
+        views = 0
+        views_match = re.search(r'<span class="tgme_widget_message_views">([^<]+)</span>', post_html)
+        if views_match:
+            view_str = views_match.group(1).strip()
+            if 'K' in view_str:
+                view_str_clean = view_str.replace('K', '')
                 try:
-                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    unix_time = int(dt.timestamp())
+                    views = int(float(view_str_clean) * 1000)
                 except:
                     pass
-            
-            # Get views
-            views = 0
-            views_span = block.find('span', class_='tgme_widget_message_views')
-            if views_span:
-                views_text = views_span.get_text().strip()
-                views_match = re.search(r'([\d.]+)(K|M)?', views_text)
-                if views_match:
-                    value = float(views_match.group(1))
-                    suffix = views_match.group(2)
-                    if suffix == 'K':
-                        value *= 1000
-                    elif suffix == 'M':
-                        value *= 1000000
-                    views = int(value)
-            
-            # Extract media
-            media = []
-            
-            # Photos
-            photo_wraps = block.find_all('a', class_='tgme_widget_message_photo_wrap')
-            for photo in photo_wraps:
-                style = photo.get('style', '')
-                bg_match = re.search(r"url\('([^']+)'\)", style)
-                if bg_match:
-                    # Convert thumbnail URL to full size
-                    thumb_url = bg_match.group(1)
-                    full_url = thumb_url.replace('-thumb', '')
-                    media.append({
-                        "type": "photo",
-                        "url": full_url,
-                        "width": 0,
-                        "height": 0
-                    })
-            
-            # Videos
-            video_tags = block.find_all('video')
-            for video in video_tags:
-                src = video.get('src', '')
-                if src:
-                    media.append({
-                        "type": "video",
-                        "url": src
-                    })
-            
-            # Files/Documents
-            doc_divs = block.find_all('div', class_='tgme_widget_message_document')
-            for doc in doc_divs:
-                title_div = doc.find('div', class_='tgme_widget_message_document_title')
-                file_url = ""
-                if title_div and title_div.find('a'):
-                    file_url = title_div.find('a').get('href', '')
-                media.append({
-                    "type": "file",
-                    "url": file_url,
-                    "name": title_div.get_text().strip() if title_div else ""
-                })
-            
-            # Extract hashtags, mentions, links
-            hashtags = re.findall(r'#\w+', message_text)
-            mentions = re.findall(r'@\w+', message_text)
-            
-            # Extract links from HTML
-            links = []
-            if text_div:
-                for a_tag in text_div.find_all('a'):
-                    href = a_tag.get('href', '')
-                    if href and href.startswith('http'):
-                        links.append(href)
-            # Also find links in text
-            text_links = re.findall(r'https?://[^\s<>"]+', message_text)
-            links.extend([l for l in text_links if l not in links])
-            
-            # Get sender name if forwarded
-            sender_name = ""
-            fwd_div = block.find('div', class_='tgme_widget_message_forwarded_from')
-            if fwd_div:
-                sender_name = fwd_div.get_text().strip()
-            
-            return {
-                "id": message_id,
-                "message": message_text,
-                "date": date_str,
-                "edited": False,
-                "views": views,
-                "forwards": 0,
-                "replies": 0,
-                "sender_name": sender_name,
-                "media": media,
-                "hashtags": hashtags,
-                "mentions": mentions,
-                "links": links
-            }
-            
-        except Exception as e:
-            logging.error(f"Error parsing message block: {e}")
-            return None
-            
-    def get_channel_info(self, channel_username):
-        """Get channel info from the public page"""
-        self._rate_limit()
+            else:
+                try:
+                    views = int(view_str)
+                except:
+                    pass
         
-        try:
-            url = f"https://telesco.pe/{channel_username}"
-            response = self.session.get(url, headers=self._get_headers(), timeout=30)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Get channel title
-            title = channel_username
-            title_div = soup.find('div', class_='tgme_channel_info_header_title')
-            if title_div:
-                title = title_div.get_text().strip()
-            
-            # Get channel photo
-            photo_url = ""
-            photo_img = soup.find('img', class_='tgme_page_photo_image')
-            if photo_img and photo_img.get('src'):
-                photo_url = photo_img['src']
-            
-            # Try to get member count
-            id_num = 0
-            counter_div = soup.find('div', class_='tgme_channel_info_counter')
-            if counter_div:
-                counter_text = counter_div.get_text()
-                id_match = re.search(r'(\d+)', counter_text.replace(' ', ''))
-                if id_match:
-                    id_num = int(id_match.group(1))
-            
-            return {
-                "id": id_num,
-                "title": title,
-                "username": channel_username,
-                "photo_url": photo_url
-            }
-            
-        except Exception as e:
-            logging.error(f"Error getting channel info for {channel_username}: {e}")
-            return {
-                "id": 0,
-                "title": channel_username,
-                "username": channel_username,
-                "photo_url": ""
-            }
+        # Extract media URLs
+        media = self._extract_media(post_html)
+        
+        # Extract hashtags, mentions, links from message
+        hashtags = re.findall(r'#\w+', message)
+        mentions = re.findall(r'@\w+', message)
+        links = re.findall(r'https?://[^\s<>"]+', message)
+        
+        return {
+            "id": post_id,
+            "message": message,
+            "date": date_iso if date_iso else post_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "edited": False,
+            "views": views,
+            "forwards": 0,
+            "replies": 0,
+            "sender_name": "",
+            "media": media,
+            "hashtags": hashtags,
+            "mentions": mentions,
+            "links": links
+        }
+    
+    def _extract_media(self, post_html):
+        """Extract media (photos, videos) from post HTML"""
+        media = []
+        
+        # Extract photo URLs
+        photo_matches = re.findall(r'<img[^>]*src="([^"]+)"', post_html)
+        for url in photo_matches:
+            if 'telegram' in url or 't.me' in url:
+                media.append({
+                    "type": "photo",
+                    "url": url,
+                    "width": 0,
+                    "height": 0
+                })
+        
+        # Extract video URLs
+        video_matches = re.findall(r'<video[^>]*src="([^"]+)"', post_html)
+        for url in video_matches:
+            media.append({
+                "type": "video",
+                "url": url
+            })
+        
+        return media
