@@ -5,6 +5,10 @@ on:
     - cron: '*/30 * * * *'  # Every 30 minutes
   workflow_dispatch:        # Allow manual trigger
 
+# Add this permissions block
+permissions:
+  contents: write
+
 jobs:
   export:
     runs-on: ubuntu-latest
@@ -14,6 +18,8 @@ jobs:
       uses: actions/checkout@v4
       with:
         ref: main
+        # This line gives the action permission to push later
+        persist-credentials: true
         
     - name: Setup Python
       uses: actions/setup-python@v5
