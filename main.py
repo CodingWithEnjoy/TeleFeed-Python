@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+import time
 from fetcher import TelegramFetcher
 from exporter import Exporter
 from config import Config
@@ -20,11 +21,11 @@ def main():
     for channel in channels:
         logging.info(f"Processing channel: {channel}")
         try:
-            # The original Go app used telesco.pe RSS feeds.
-            # We'll mimic that approach for public data.
-            url = f"https://telesco.pe/{channel}/rss"
-            posts = fetcher.fetch_posts(url)
+            # Get channel info
             channel_info = fetcher.get_channel_info(channel)
+            
+            # Get posts - pass just the username, not a URL
+            posts = fetcher.fetch_posts(channel)
             
             data = {
                 "info": channel_info,
@@ -37,9 +38,7 @@ def main():
             
         except Exception as e:
             logging.error(f"Failed to process channel {channel}: {e}")
-            # Continue with next channel, just like the Go version does
             continue
 
 if __name__ == "__main__":
-    import time
     main()
